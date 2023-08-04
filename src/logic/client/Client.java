@@ -1,5 +1,11 @@
 package logic.client;
 
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.net.InetAddress;
+import java.net.Socket;
+
 import gameGui.ClientGuiEvents;
 import gameGui.GameBoard;
 import javafx.scene.Scene;
@@ -10,24 +16,17 @@ import logic.util.ServerSendPacket;
 import logic.util.ServerTile;
 import logic.util.TileState;
 
-import java.io.*;
-import java.net.InetAddress;
-import java.net.Socket;
-
-
+/** A class allowing the game to interact with the server */
 public class Client extends Thread {
-
-    Socket socket;
-    String serverIP;
-    GameBoard board;
-
-    Scene scene;
-    Label label = new Label("game has not started yet. waiting for all players to join");
+    private Socket socket;
+    private GameBoard board;
+    private Scene scene;
     private int clientID;
 
     public Client(String ip) throws IOException {
-        scene = new Scene(label, 8 * 53, 9 * 53);
-        serverIP = ip;
+        Label waitingLabel = new Label("Game has not started yet, please wait for all players to join.");
+
+        scene = new Scene(waitingLabel, 8 * 53, 9 * 53);
         socket = new Socket(InetAddress.getByName(ip), 12345);
     }
 
@@ -41,25 +40,184 @@ public class Client extends Thread {
 
     @Override
     public void run() {
-        System.out.println("client sending");
-        ClientSendPacket packet = new ClientSendPacket();
-        packet.type = "getID";
-        ServerSendPacket serverPacket;
+        System.out.println("Client sending");
+        
+        ServerSendPacket lastServerPacket = getClientIDPacket();
+        this.clientID = lastServerPacket.clientID;
+        
+        System.out.println("My client ID is :" + clientID);
+
+        ClientGuiEvents guiHandler = getGUIHandler();
+        board = new GameBoard(clientID, guiHandler);
+        
+        lastServerPacket = startGame(lastServerPacket);
+        lastServerPacket = runGameLoop(lastServerPacket);
+        
+        showGameWinner(lastServerPacket.tiles, lastServerPacket.totalPlayers);
+        
         try {
-            getOutput().writeObject(packet);
-            System.out.println("waiting for number");
+            socket.close();
+        } catch (IOException e) {
+            System.out.println("Failed to close socket");
+        }
+    }
+
+    /**
+     * Calculates the winner, and displays the score and winner on the screen
+     */
+    private void showGameWinner(ServerTile[][] boardTiles, int totalPlayers) {
+        int[] playersScores = new int[totalPlayers];
+
+        System.out.println(boardTiles);
+
+        // Calculates each player's score
+        for (int i = 0; i < board.getSize(); i++) {
+            for (int j = 0; j < board.getSize(); j++) {
+                playersScores[boardTiles[i][j].getOwnerId()] += 1;
+            }
+        }
+        
+        int winner = 0;
+        int bestScore = playersScores[0];
+
+        // Calculate the player with the highest score
+        for (int i = 1; i < totalPlayers; i++) {
+            if (playersScores[i] > bestScore) {
+                bestScore = playersScores[i];
+                winner = i;
+            }
+        }
+
+        StringBuilder text = new StringBuilder("You " + (winner == clientID ? "win" : "lose") + "!!!");
+
+        for (int i = 0; i < totalPlayers; i++) {
+            text.append("\nPlayer ").append(i + 1).append(" : ").append(playersScores[i]);
+        }
+        
+        Label label = new Label(text.toString());
+        scene.setRoot(label);
+    }
+
+    /**
+     * Returns true if all tiles have been claimed
+     */
+    private boolean isGameOver(ServerTile[][] gameTiles) {
+        if (gameTiles == null) {
+            return false;
+        }
+
+        int counter = 0;
+
+        for (int i = 0; i < board.getSize(); i++) {
+            for (int j = 0; j < board.getSize(); j++) {
+                if (gameTiles[i][j].getState() == TileState.owned) {
+                    counter += 1;
+                }
+            }
+        }
+
+        return counter == board.getSize() * board.getSize();
+    }
+
+    public Scene getClientBoard() {
+        return scene;
+    }
+
+    /**
+     * Fetches this client's id from the server
+     * @throws RuntimeException if there is a problem reading the server's response
+     */
+    private ServerSendPacket getClientIDPacket() throws RuntimeException {
+        ServerSendPacket serverPacket;
+        ClientSendPacket clientPacket = new ClientSendPacket();
+        clientPacket.type = "getID";
+
+        try {
+            getOutput().writeObject(clientPacket);
+            System.out.println("Waiting for client ID...");
             serverPacket = (ServerSendPacket) getInput().readObject();
         } catch (ClassNotFoundException | IOException e) {
             throw new RuntimeException(e);
         }
-        System.out.println("my num is :" + serverPacket.id);
 
-        ClientGuiEvents guiHandler = new ClientGuiEvents() {
+        return serverPacket;
+    }
+
+    /**
+     * Polls the server until all players have joined, and the game can be started.
+     * @param lastServerPacket The last packet returned by the server, which contains the game state
+     * @return the latest packet returned by the server
+     */
+    private ServerSendPacket startGame(ServerSendPacket lastServerPacket) {
+        ServerSendPacket serverPacket = lastServerPacket;
+        ClientSendPacket clientPacket = new ClientSendPacket();
+        clientPacket.type = "startGame";
+
+        System.out.println("Waiting for all players");
+
+        // Poll every second to see if all players have joined the game yet
+        while (!serverPacket.status) {
+            try {
+                getOutput().writeObject(clientPacket);
+                serverPacket = (ServerSendPacket) getInput().readObject();
+                Thread.sleep(1000);
+            } catch (IOException | ClassNotFoundException | InterruptedException e) {
+                System.out.println("A network error ocurred");
+            }
+        }
+
+        // Initialize the game board
+        scene.setRoot(board.getBoard());
+
+        return serverPacket;
+    }
+
+    /**
+     * Runs the game loop, polling the server for the latest game state
+     * and re-rendering the game board
+     * @param lastServerPacket The last packet returned by the server, which contains the game state
+     * @return the latest packet returned by the server
+     */
+    private ServerSendPacket runGameLoop(ServerSendPacket lastServerPacket) {
+        ServerSendPacket serverPacket = lastServerPacket;
+        ClientSendPacket clientPacket = new ClientSendPacket();
+
+        if (serverPacket.tiles != null) {
+            System.out.println(serverPacket.tiles.length);
+        } else {
+            System.out.println("0");
+        }
+
+        while (!isGameOver(serverPacket.tiles)) {
+            try {
+                clientPacket.type = "status";
+                getOutput().writeObject(clientPacket);
+                
+                serverPacket = (ServerSendPacket) getInput().readObject();
+                // Re-render game board with the new game board
+                board.setTiles(serverPacket.tiles);
+
+                Thread.sleep(250);
+            } catch (IOException | ClassNotFoundException | InterruptedException e) {
+                System.out.println("A network error ocurred");
+            }
+        }
+
+        return serverPacket;
+    }
+
+    private ClientGuiEvents getGUIHandler() {
+        return new ClientGuiEvents() {
             @Override
+            /** Locks a tile when the user starts to draw on a tile 
+             * @param tilePoint the tile the user is drawing on
+             * @return if the server call to lock the tile was successful
+            */
             public boolean onDragStart(Pair<Integer, Integer> tilePoint) {
                 ClientSendPacket packet = new ClientSendPacket();
                 packet.type = "lockTile";
                 packet.point = tilePoint;
+
                 try {
                     getOutput().writeObject(packet);
                     ServerSendPacket serverPacket = (ServerSendPacket) getInput().readObject();
@@ -70,20 +228,27 @@ public class Client extends Thread {
             }
 
             @Override
+            /** Unlocks or claims a tile when the user starts to draw on a tile
+             * @param moreThanHalf whether the user has painted at least 50% of the tile
+             * @param tilePoint the tile the user is drawing on
+             * @return if the server call to unlock/claim the tile was successful
+            */
             public boolean onDragEnd(boolean moreThanHalf, Pair<Integer, Integer> tilePoint) {
                 ClientSendPacket packet = new ClientSendPacket();
+
                 try {
                     if (moreThanHalf) {
                         packet.type = "ownTile";
                         packet.point = tilePoint;
                         getOutput().writeObject(packet);
+                        
                         ServerSendPacket serverPacket = (ServerSendPacket) getInput().readObject();
                         return serverPacket.status;
-
                     } else {
                         packet.type = "unlockTile";
                         packet.point = tilePoint;
                         getOutput().writeObject(packet);
+                        
                         ServerSendPacket serverPacket = (ServerSendPacket) getInput().readObject();
                         return serverPacket.status;
                     }
@@ -92,93 +257,5 @@ public class Client extends Thread {
                 }
             }
         };
-
-
-
-        this.clientID = serverPacket.id;
-        board = new GameBoard(serverPacket.id, guiHandler);
-
-        packet.type = "startGame";
-        System.out.println("waiting for all players");
-        while (!serverPacket.status) {
-            try {
-                getOutput().writeObject(packet);
-                serverPacket = (ServerSendPacket) getInput().readObject();
-                Thread.sleep(1000);
-            } catch (IOException | ClassNotFoundException | InterruptedException e) {
-                System.out.println("some network error");
-            }
-        }
-        scene.setRoot(board.getBoard());
-
-        while (!checkEndGame(serverPacket.map)) {
-            try {
-                packet.type = "status";
-                getOutput().writeObject(packet);
-                serverPacket = (ServerSendPacket) getInput().readObject();
-                board.setData(serverPacket.map);
-                Thread.sleep(1000);
-            } catch (IOException | ClassNotFoundException | InterruptedException e) {
-                System.out.println("some network error");
-            }
-        }
-
-        showGameWinner(serverPacket.map, serverPacket.totalPlayers);
-        try {
-            socket.close();
-        } catch (IOException e) {
-            System.out.println("failed to close socket");
-        }
-
     }
-
-    private void showGameWinner(ServerTile[][] map, int totalPlayers) {
-        int[] playersScores = new int[totalPlayers];
-        for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 8; j++) {
-                playersScores[map[i][j].getOwnerId()] += 1;
-            }
-        }
-        int winner = 0;
-        int bestScore = playersScores[0];
-        for (int i = 1; i < totalPlayers; i++) {
-            if (playersScores[i] > bestScore) {
-                bestScore = playersScores[i];
-                winner = i;
-            }
-        }
-        String status;
-        if (winner == clientID) {
-            status = "win";
-        } else {
-            status = "loose";
-        }
-        StringBuilder text = new StringBuilder("you " + status + " !!!");
-        for (int i = 0; i < totalPlayers; i++) {
-            text.append("\n" + "player ").append(i + 1).append(" : ").append(playersScores[i]);
-        }
-        Label label = new Label(text.toString());
-        scene.setRoot(label);
-    }
-
-    private boolean checkEndGame(ServerTile[][] map) {
-        if (map == null) {
-            return false;
-        }
-        int counter = 0;
-        for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 8; j++) {
-                if (map[i][j].getState() == TileState.owned) {
-                    counter += 1;
-                }
-            }
-        }
-        return counter == 64;
-    }
-
-
-    public Scene getClientBoard() {
-        return scene;
-    }
-
 }

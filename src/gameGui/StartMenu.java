@@ -8,6 +8,7 @@ import javafx.scene.control.TextField;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.GridPane;
 
+/** The menu to start the game, shown to the user when the application opens */
 public class StartMenu {
     private final Scene scene;
     private final TextField ipText;
@@ -18,19 +19,19 @@ public class StartMenu {
         pane.setHgap(5);
         pane.setVgap(2);
 
-        Label ipLabel = new Label("server ip:");
-        Label numOfPlayerLabel = new Label("number of player:");
+        Label numOfPlayerLabel = new Label("Number of players:");
+        Label ipLabel = new Label("Server IP:");
 
         ipText = new TextField();
-        ipText.setPromptText("server ip");
+        ipText.setPromptText("Server IP");
         ipText.setText("127.0.0.1");
 
         numberOfPlayers = new TextField();
-        numberOfPlayers.setPromptText("number of player");
+        numberOfPlayers.setPromptText("Number of players");
         numberOfPlayers.setText("2");
 
-        Button joinServer = new Button("join server");
-        Button startServer = new Button("start server");
+        Button joinServer = new Button("Join Server");
+        Button startServer = new Button("Start Server");
 
         joinServer.setOnMouseClicked(joinServerEventHandler);
         startServer.setOnMouseClicked(startServerEventHandler);
@@ -50,7 +51,6 @@ public class StartMenu {
         return scene;
     }
 
-
     public String getIp() {
         return ipText.getText();
     }
@@ -62,5 +62,4 @@ public class StartMenu {
             return 2;
         }
     }
-
 }
