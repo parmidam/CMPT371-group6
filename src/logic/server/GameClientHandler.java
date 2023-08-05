@@ -15,6 +15,9 @@ public class GameClientHandler extends Thread {
     private final ServerTile[][] tiles;
     private final Socket socket;
     private final int totalPlayers;
+
+    private ObjectOutputStream out;
+    private ObjectInputStream in;
     
     /** Whether the game has started or not */
     private boolean started = false;
@@ -33,11 +36,13 @@ public class GameClientHandler extends Thread {
     }
 
     ObjectInputStream getInput() throws IOException {
-        return new ObjectInputStream(socket.getInputStream());
+        // return new ObjectInputStream(socket.getInputStream());
+        return in;
     }
 
     ObjectOutputStream getOutput() throws IOException {
-        return new ObjectOutputStream(socket.getOutputStream());
+        // return new ObjectOutputStream(socket.getOutputStream());
+        return out;
     }
 
     @Override
@@ -46,6 +51,13 @@ public class GameClientHandler extends Thread {
      * @throws RuntimeException if there is a network issue
      */
     public void run() {
+        try {
+            out = new ObjectOutputStream(socket.getOutputStream());
+            in = new ObjectInputStream(socket.getInputStream());
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
         while (socket.isConnected()) {
             try {
                 ClientSendPacket clientPacket = (ClientSendPacket) getInput().readObject();
@@ -90,7 +102,7 @@ public class GameClientHandler extends Thread {
         ServerSendPacket packet = new ServerSendPacket();
         packet.clientID = this.clientID;
 
-        getOutput().writeObject(packet);
+        sendPacket(packet);
     }
     
     /**
@@ -100,7 +112,7 @@ public class GameClientHandler extends Thread {
         ServerSendPacket packet = new ServerSendPacket();
         packet.status = started;
 
-        getOutput().writeObject(packet);
+        sendPacket(packet);
     }
 
     /**
@@ -123,7 +135,7 @@ public class GameClientHandler extends Thread {
                 packet.status = false;
             }
 
-            getOutput().writeObject(packet);
+            sendPacket(packet);
         }
     }
     
@@ -144,7 +156,7 @@ public class GameClientHandler extends Thread {
                 tile.setOwnerId(-1);
             }
 
-            getOutput().writeObject(packet);
+            sendPacket(packet);
         }
     }
 
@@ -167,7 +179,7 @@ public class GameClientHandler extends Thread {
                 packet.status = false;
             }
 
-            getOutput().writeObject(packet);
+            sendPacket(packet);
         }
     }
 
@@ -176,13 +188,11 @@ public class GameClientHandler extends Thread {
      * @param clientPacket The incoming request
      */
     private void handleStatus() throws IOException {
-        // System.out.println("Handling status..." + tiles.length);
-
         ServerSendPacket packet = new ServerSendPacket();
         packet.tiles = tiles;
         packet.totalPlayers = totalPlayers;
 
-        getOutput().writeObject(packet);
+        sendPacket(packet);
     }
 
     /**
@@ -190,5 +200,15 @@ public class GameClientHandler extends Thread {
      */
     private boolean isUserPainting(ServerTile tile) {
         return tile.getState() == TileState.painting && tile.getOwnerId() == clientID;
+    }
+
+    /**
+     * Sends a packet to the server
+     * Also resets the OutputStream, ensuring duplicate objects can be written again, such as the game board
+     * @throws IOException if there is a network error
+     */
+    private void sendPacket(ServerSendPacket packet) throws IOException {
+        getOutput().writeUnshared(packet);
+        getOutput().reset();
     }
 }

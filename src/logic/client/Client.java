@@ -23,6 +23,9 @@ public class Client extends Thread {
     private Scene scene;
     private int clientID;
 
+    private ObjectInputStream in;
+    private ObjectOutputStream out;
+
     public Client(String ip) throws IOException {
         Label waitingLabel = new Label("Game has not started yet, please wait for all players to join.");
 
@@ -31,15 +34,22 @@ public class Client extends Thread {
     }
 
     ObjectInputStream getInput() throws IOException {
-        return new ObjectInputStream(socket.getInputStream());
+        return in;
     }
 
     ObjectOutputStream getOutput() throws IOException {
-        return new ObjectOutputStream(socket.getOutputStream());
+        return out;
     }
 
     @Override
     public void run() {
+        try {
+            out = new ObjectOutputStream(socket.getOutputStream());
+            in = new ObjectInputStream(socket.getInputStream());
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
         System.out.println("Client sending");
         
         ServerSendPacket lastServerPacket = getClientIDPacket();
@@ -67,8 +77,6 @@ public class Client extends Thread {
      */
     private void showGameWinner(ServerTile[][] boardTiles, int totalPlayers) {
         int[] playersScores = new int[totalPlayers];
-
-        System.out.println(boardTiles);
 
         // Calculates each player's score
         for (int i = 0; i < board.getSize(); i++) {
@@ -133,7 +141,7 @@ public class Client extends Thread {
         clientPacket.type = "getID";
 
         try {
-            getOutput().writeObject(clientPacket);
+            sendPacket(clientPacket);
             System.out.println("Waiting for client ID...");
             serverPacket = (ServerSendPacket) getInput().readObject();
         } catch (ClassNotFoundException | IOException e) {
@@ -158,7 +166,7 @@ public class Client extends Thread {
         // Poll every second to see if all players have joined the game yet
         while (!serverPacket.status) {
             try {
-                getOutput().writeObject(clientPacket);
+                sendPacket(clientPacket);
                 serverPacket = (ServerSendPacket) getInput().readObject();
                 Thread.sleep(1000);
             } catch (IOException | ClassNotFoundException | InterruptedException e) {
@@ -182,18 +190,13 @@ public class Client extends Thread {
         ServerSendPacket serverPacket = lastServerPacket;
         ClientSendPacket clientPacket = new ClientSendPacket();
 
-        if (serverPacket.tiles != null) {
-            System.out.println(serverPacket.tiles.length);
-        } else {
-            System.out.println("0");
-        }
-
         while (!isGameOver(serverPacket.tiles)) {
             try {
                 clientPacket.type = "status";
-                getOutput().writeObject(clientPacket);
+                sendPacket(clientPacket);
                 
                 serverPacket = (ServerSendPacket) getInput().readObject();
+
                 // Re-render game board with the new game board
                 board.setTiles(serverPacket.tiles);
 
@@ -219,7 +222,7 @@ public class Client extends Thread {
                 packet.point = tilePoint;
 
                 try {
-                    getOutput().writeObject(packet);
+                    sendPacket(packet);
                     ServerSendPacket serverPacket = (ServerSendPacket) getInput().readObject();
                     return serverPacket.status;
                 } catch (IOException | ClassNotFoundException e) {
@@ -240,14 +243,14 @@ public class Client extends Thread {
                     if (moreThanHalf) {
                         packet.type = "ownTile";
                         packet.point = tilePoint;
-                        getOutput().writeObject(packet);
+                        sendPacket(packet);
                         
                         ServerSendPacket serverPacket = (ServerSendPacket) getInput().readObject();
                         return serverPacket.status;
                     } else {
                         packet.type = "unlockTile";
                         packet.point = tilePoint;
-                        getOutput().writeObject(packet);
+                        sendPacket(packet);
                         
                         ServerSendPacket serverPacket = (ServerSendPacket) getInput().readObject();
                         return serverPacket.status;
@@ -257,5 +260,15 @@ public class Client extends Thread {
                 }
             }
         };
+    }
+
+    /**
+     * Sends a packet to the server
+     * Also resets the OutputStream, ensuring duplicate objects can be written again
+     * @throws IOException if there is a network error
+     */
+    private void sendPacket(ClientSendPacket packet) throws IOException {
+        getOutput().writeUnshared(packet);
+        getOutput().reset();
     }
 }
