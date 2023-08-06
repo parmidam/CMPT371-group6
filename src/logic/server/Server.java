@@ -1,25 +1,27 @@
 package logic.server;
 
-import logic.util.ServerTile;
-
-import java.io.*;
+import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 
+import logic.util.ServerTile;
 
+/** A class representing the backend server for the game */
 public class Server extends Thread {
+    private int connectedPlayerCount = 0;
+    private ServerSocket serverSocket;
+    
+    // Config
+    private final int numberOfPlayers;
+    private final int port = 12345;
+    
+    private GameClientHandler[] threadList = new GameClientHandler[8];
+    private ServerTile[][] tiles = new ServerTile[8][8];
 
+    public Server(int numberOfPlayers) {
+        this.numberOfPlayers = numberOfPlayers;
 
-    int connectedPlayer = 0;
-    ServerSocket socket;
-    final int numberOfPlayer;
-
-    Thread[] threadList = new Thread[8];
-    ServerTile[][] tiles = new ServerTile[8][8];
-
-    public Server(int numberOfPlayer) {
-
-        this.numberOfPlayer = numberOfPlayer;
+        // Initialize the game board
         for (int i = 0; i < 8; i++) {
             for (int j = 0; j < 8; j++) {
                 ServerTile tile = new ServerTile();
@@ -28,19 +30,29 @@ public class Server extends Thread {
         }
     }
 
+    
     @Override
-    public void run() {
+    /**
+     * Starts the server, and waits for all players to join
+     * @throws RuntimeException if there is a problem with the network when accepting client connections
+     */
+    public void run() throws RuntimeException {
         try {
-            socket = new ServerSocket(12345);
-            System.out.println("waiting for  : " + numberOfPlayer + " player to connect");
-            while (connectedPlayer < numberOfPlayer) {
+            serverSocket = new ServerSocket(port);
+            
+            System.out.println("Waiting for " + numberOfPlayers + " players to connect");
+
+            while (connectedPlayerCount < numberOfPlayers) {
                 try {
-                    Socket s = socket.accept();
-                    System.out.println("A new player is connected !! ");
-                    Thread t = new GameClientHandler(connectedPlayer, s, tiles, numberOfPlayer);
-                    threadList[connectedPlayer] = t;
+                    Socket clientSocket = serverSocket.accept();
+                    
+                    System.out.println("A new player is connected!");
+
+                    GameClientHandler t = new GameClientHandler(connectedPlayerCount, clientSocket, tiles, numberOfPlayers);
+                    threadList[connectedPlayerCount] = t;
                     t.start();
-                    connectedPlayer += 1;
+
+                    connectedPlayerCount += 1;
                 } catch (IOException e) {
                     throw new RuntimeException(e);
                 }
@@ -49,12 +61,10 @@ public class Server extends Thread {
             throw new RuntimeException(e);
         }
 
-
-        for (int i = 0; i < connectedPlayer; i++) {
-            ((GameClientHandler) threadList[i]).setStarted(true);
+        for (int i = 0; i < connectedPlayerCount; i++) {
+            (threadList[i]).setStarted(true);
         }
-        System.out.println("all players connected starting the game");
+
+        System.out.println("All players have connected, starting the game...");
     }
-
-
 }
